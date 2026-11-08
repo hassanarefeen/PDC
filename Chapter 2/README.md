@@ -1,107 +1,90 @@
 # Parallel & Distributed Computing — Assignment 2
-**Topic:** Thread-based Parallelism & Synchronization (Chapter 2)  
-**Implementation:** Enhanced Bounded-Buffer Producer-Consumer using Counting Semaphores and Mutex Locks
+**Theme:** Thread-based Parallelism & Synchronization (Chapter 2)
+**Program:** A bounded writer/reader pipeline built around counting semaphores and a mutex
 
 ---
 
-## 1. Overview
-This project is an academic submission for the Parallel & Distributed Computing course. It is based on the thread synchronization paradigms presented in **Chapter 2** of the *Python Parallel Programming Cookbook (Second Edition)* by Packt Publishing.
+## 1. What this is
+A coursework submission for the Parallel & Distributed Computing module. It builds on the
+thread-synchronization ideas from **Chapter 2** of the *Python Parallel Programming Cookbook
+(Second Edition)*, Packt Publishing.
 
-The original recipe demonstrates elementary usage of `threading.Semaphore` with unbounded shared lists. This project extends that concept into a production-grade, bounded-buffer producer-consumer architecture that avoids buffer underflows, buffer overflows, and race conditions.
-
----
-
-## 2. Key Modifications & Enhancements
-1. **Dual Counting Semaphores:**
-   - `empty_slots` initialized to `BUFFER_CAPACITY (5)` to enforce a strict upper bound on memory usage.
-   - `full_slots` initialized to `0` to block consumers immediately whenever the buffer is starved of data.
-2. **Critical Section Protection:**
-   - Implemented `threading.Lock()` across all buffer mutations (`append` and `pop(0)`) to guarantee strict atomicity and eliminate race conditions on shared pointers.
-3. **Graceful Shutdown Protocol:**
-   - Used `threading.Event()` combined with a timed acquire pattern on semaphores to eliminate thread hangs and deadlocks upon task completion.
-4. **Diagnostic Logging:**
-   - Added microsecond-accurate timestamped tracing showing thread IDs, operations performed, and live buffer capacity states.
+The book's recipe only shows the bare bones — a `threading.Semaphore` together with an
+ever-growing shared list. This program reworks that idea into a proper **bounded store** where
+a group of writer threads and reader threads hand data back and forth safely, with no overflow,
+no underflow, and no race conditions on the shared container.
 
 ---
 
-## 3. Synchronization Architecture
+## 2. Design choices
+1. **One object owns the concurrency.**
+   All of the locking and signalling lives inside a single `BoundedStore` class, so the writer
+   and reader functions never touch the semaphores directly. This keeps the critical section in
+   exactly one place.
+2. **Two counting semaphores instead of sleeps.**
+   - `_vacant` starts at `CAPACITY (8)` and tracks free positions, so writers block the moment
+     the store is full.
+   - `_ready` starts at `0` and tracks filled positions, so readers block the moment the store
+     is empty.
+3. **Mutex around every mutation.**
+   A `threading.Lock` wraps each `append` / `popleft` on the internal `deque`, guaranteeing the
+   buffer update is atomic.
+4. **Clean shutdown.**
+   A `threading.Event` plus a half-second timed `acquire` lets readers finish any remaining data
+   and then exit on their own, with no deadlocks or hung threads.
+5. **Readable tracing.**
+   Every event is printed with a millisecond timestamp, the thread tag, the action, and the live
+   load of the store.
 
+---
+
+## 3. Flow at a glance
 
 ```
 
-[Producers: P1, P2, P3]
-│
-▼ (Acquire empty_slots)
-┌────────────────────────────────────────────────────────┐
-│             MUTEX LOCK (buffer_lock)                   │
-│   Shared Circular Buffer [Capacity: 5 Elements]        │
-└────────────────────────────────────────────────────────┘
-▲ (Release empty_slots)
-│
-[Consumers: C1, C2] ◄─── (Acquire full_slots)
+[Writer-1  Writer-2  Writer-3  Writer-4]
+        |
+        v   put()  -> acquire(_vacant)
++--------------------------------------------------+
+|            MUTEX  (_gate)                         |
+|     deque store   [ capacity = 8 payloads ]       |
++--------------------------------------------------+
+        ^   take()  -> acquire(_ready)
+        |
+[Reader-1  Reader-2  Reader-3]
 
 ```
 
 ---
 
-## 4. How to Run
-Ensure Python 3.8+ is installed on your machine:
+## 4. Running it
+Needs Python 3.8 or newer:
 
 ```bash
 cd "Chapter 2"
-python3 thread_synchronization_semaphore.py
-
+python bounded_buffer_monitor.py
 ```
 
-### Output Trace
+### Sample trace (timings vary between runs)
 
 ```text
-===========================================================================
-  PARALLEL & DISTRIBUTED COMPUTING: BOUNDED-BUFFER SEMAPHORE SYNCHRONIZATION
-  Configuration: Buffer Size = 5, Total Workload = 15 items
-===========================================================================
-[19:51:12.750] [ Consumer-1 ] STARTED            | Worker thread initialized.
-[19:51:12.751] [ Consumer-2 ] STARTED            | Worker thread initialized.
-[19:51:12.754] [ Producer-1 ] STARTED            | Worker thread initialized.
-[19:51:12.754] [ Producer-2 ] STARTED            | Worker thread initialized.
-[19:51:12.755] [ Producer-3 ] STARTED            | Worker thread initialized.
-[19:51:12.858] [ Producer-2 ] ITEM INSERTED      | Item: P2-Task#1 | Buffer State: 1/5
-[19:51:12.858] [ Consumer-1 ] ITEM CONSUMED      | Item: P2-Task#1 | Buffer State: 0/5
-[19:51:13.016] [ Producer-2 ] ITEM INSERTED      | Item: P2-Task#2 | Buffer State: 1/5
-[19:51:13.016] [ Consumer-2 ] ITEM CONSUMED      | Item: P2-Task#2 | Buffer State: 0/5
-[19:51:13.022] [ Producer-3 ] ITEM INSERTED      | Item: P3-Task#1 | Buffer State: 1/5
-[19:51:13.037] [ Producer-1 ] ITEM INSERTED      | Item: P1-Task#1 | Buffer State: 2/5
-[19:51:13.064] [ Consumer-1 ] ITEM CONSUMED      | Item: P3-Task#1 | Buffer State: 1/5
-[19:51:13.273] [ Consumer-2 ] ITEM CONSUMED      | Item: P1-Task#1 | Buffer State: 0/5
-[19:51:13.317] [ Producer-2 ] ITEM INSERTED      | Item: P2-Task#3 | Buffer State: 1/5
-[19:51:13.363] [ Producer-1 ] ITEM INSERTED      | Item: P1-Task#2 | Buffer State: 2/5
-[19:51:13.404] [ Producer-3 ] ITEM INSERTED      | Item: P3-Task#2 | Buffer State: 3/5
-[19:51:13.479] [ Consumer-1 ] ITEM CONSUMED      | Item: P2-Task#3 | Buffer State: 2/5
-[19:51:13.490] [ Producer-2 ] ITEM INSERTED      | Item: P2-Task#4 | Buffer State: 3/5
-[19:51:13.525] [ Producer-3 ] ITEM INSERTED      | Item: P3-Task#3 | Buffer State: 4/5
-[19:51:13.531] [ Producer-1 ] ITEM INSERTED      | Item: P1-Task#3 | Buffer State: 5/5
-[19:51:13.579] [ Consumer-2 ] ITEM CONSUMED      | Item: P1-Task#2 | Buffer State: 4/5
-[19:51:13.684] [ Consumer-1 ] ITEM CONSUMED      | Item: P3-Task#2 | Buffer State: 3/5
-[19:51:13.705] [ Producer-2 ] ITEM INSERTED      | Item: P2-Task#5 | Buffer State: 4/5
-[19:51:13.706] [ Producer-2 ] FINISHED           | All designated items produced.
-[19:51:13.885] [ Producer-1 ] ITEM INSERTED      | Item: P1-Task#4 | Buffer State: 5/5
-[19:51:13.942] [ Consumer-2 ] ITEM CONSUMED      | Item: P2-Task#4 | Buffer State: 4/5
-[19:51:13.943] [ Producer-3 ] ITEM INSERTED      | Item: P3-Task#4 | Buffer State: 5/5
-[19:51:14.176] [ Consumer-1 ] ITEM CONSUMED      | Item: P3-Task#3 | Buffer State: 4/5
-[19:51:14.177] [ Producer-3 ] ITEM INSERTED      | Item: P3-Task#5 | Buffer State: 5/5
-[19:51:14.177] [ Producer-3 ] FINISHED           | All designated items produced.
-[19:51:14.265] [ Consumer-2 ] ITEM CONSUMED      | Item: P1-Task#3 | Buffer State: 4/5
-[19:51:14.265] [ Producer-1 ] ITEM INSERTED      | Item: P1-Task#5 | Buffer State: 5/5
-[19:51:14.266] [ Producer-1 ] FINISHED           | All designated items produced.
-[19:51:14.483] [ Consumer-1 ] ITEM CONSUMED      | Item: P2-Task#5 | Buffer State: 4/5
-[19:51:14.700] [ Consumer-2 ] ITEM CONSUMED      | Item: P1-Task#4 | Buffer State: 3/5
-[19:51:14.853] [ Consumer-1 ] ITEM CONSUMED      | Item: P3-Task#4 | Buffer State: 2/5
-[19:51:15.210] [ Consumer-2 ] ITEM CONSUMED      | Item: P3-Task#5 | Buffer State: 1/5
-[19:51:15.345] [ Consumer-1 ] ITEM CONSUMED      | Item: P1-Task#5 | Buffer State: 0/5
-[19:51:15.576] [ Consumer-1 ] FINISHED           | Consumer terminated cleanly.
-[19:51:15.590] [ Consumer-2 ] FINISHED           | Consumer terminated cleanly.
-===========================================================================
-Execution completed in 2.84 seconds.
-Final Buffer State: 0 items remaining.
-===========================================================================
+------------------------------------------------------------------------------
+  PDC ASSIGNMENT 2  :  Bounded-Store Writer / Reader Coordination
+  Store capacity = 8   |   Total payloads = 24
+------------------------------------------------------------------------------
+19:51:12.750  | Reader-1  |  ONLINE          ->  worker thread started
+19:51:12.751  | Reader-2  |  ONLINE          ->  worker thread started
+19:51:12.753  | Reader-3  |  ONLINE          ->  worker thread started
+19:51:12.754  | Writer-1  |  ONLINE          ->  worker thread started
+19:51:12.858  | Writer-2  |  ENQUEUED        ->  W2:item-1  (load 1/8)
+19:51:12.858  | Reader-1  |  DEQUEUED        ->  W2:item-1  (load 0/8)
+19:51:13.016  | Writer-4  |  ENQUEUED        ->  W4:item-1  (load 1/8)
+19:51:13.016  | Reader-2  |  DEQUEUED        ->  W4:item-1  (load 0/8)
+...
+19:51:16.912  | Reader-2  |  RETIRED         ->  drained and exited
+19:51:16.930  | Reader-3  |  RETIRED         ->  drained and exited
+------------------------------------------------------------------------------
+  Wall-clock time : 4.19 s
+  Leftover in store : 0 payload(s)
+------------------------------------------------------------------------------
 ```
